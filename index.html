@@ -3,14 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Camper Spot Atlas v1</title>
+<title>Camper Spot Atlas</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <style>
-/* v1: Leaflet + OpenStreetMap. Layout: full-height map with a 400px working panel on the left; on phones the panel becomes the lower half. */
+/* Layout: full-height map with a 400px working panel on the left; on phones the panel becomes the lower half. */
 :root{
   --bg:#EAEFEC; --panel:#F8FAF9; --raised:#FFFFFF; --line:#D3DCD8; --fg:#16211F; --muted:#5A6A66;
   --accent:#0E6B5B; --accent-fg:#FFFFFF; --best:#B86E00; --danger:#B3382C; --ring:#FFFFFF; --shadow:rgba(20,35,30,.18);
@@ -134,23 +132,12 @@ td{padding:5px 6px 5px 0;border-top:1px solid var(--line)}
 .lb .cap{position:absolute;bottom:14px;left:0;right:0;text-align:center;color:#ddd;font-size:12px}
 .lb button{position:absolute;top:12px;right:12px}
 @media (prefers-reduced-motion:no-preference){.card.click{transition:border-color .15s}}
-/* v1 additions: Leaflet */
-#map{z-index:0}
-.ver{font:500 11px var(--font-data);border:1px solid var(--accent);color:var(--accent);border-radius:4px;padding:1px 5px;vertical-align:middle;letter-spacing:0}
-.leaflet-container{font:inherit;background:var(--bg)}
-.leaflet-div-icon{background:none;border:0}
-.leaflet-popup-content{margin:10px 12px}
-.leaflet-popup-content-wrapper{border-radius:8px}
-.dotc{stroke:var(--ring)}
-.mapwrap.adding .leaflet-container{cursor:crosshair}
-@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) #map:not(.sat) .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.88)}}
-:root[data-theme="dark"] #map:not(.sat) .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.88)}
 </style>
 </head>
 <body>
 <div class="app">
   <aside class="panel">
-    <div class="head"><h1>Camper Spot Atlas <span class="ver">v1</span></h1><span class="sub" id="counts"></span></div>
+    <div class="head"><h1>Camper Spot Atlas</h1><span class="sub" id="counts"></span></div>
     <div class="tabs" role="tablist" id="tabs">
       <button class="tab" role="tab" data-tab="spots">Spots</button>
       <button class="tab" role="tab" data-tab="speed">Speedtests</button>
@@ -252,63 +239,81 @@ function toast(msg) {
   t.textContent = msg; clearTimeout(toastT); toastT = setTimeout(() => t.remove(), 3200);
 }
 
-/* ---------- Map (Leaflet + OpenStreetMap) ---------- */
-const G = { map: null, spotMk: new Map(), speedMk: new Map(), spotLayer: null, speedLayer: null };
-const gmapsUrl = s => "https://www.google.com/maps/search/?api=1&query=" + s.lat + "," + s.lng;
-const gdirUrl = s => "https://www.google.com/maps/dir/?api=1&destination=" + s.lat + "," + s.lng;
-function loadLeafletFallback() {
-  return new Promise(res => {
-    const l = document.createElement("link"); l.rel = "stylesheet"; l.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"; document.head.appendChild(l);
-    const s = document.createElement("script"); s.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"; s.onload = res; s.onerror = res; document.head.appendChild(s);
+/* ---------- Google Maps ---------- */
+const G = { map: null, Place: null, iw: null, spotMk: new Map(), speedMk: new Map(), AME: null };
+const PLACE_FIELDS = ["id", "displayName", "formattedAddress", "location", "rating", "userRatingCount", "editorialSummary", "types", "googleMapsURI", "websiteURI"];
+function loadGoogle() {
+  return new Promise((res, rej) => {
+    if (window.google && google.maps) return res();
+    window.__gmReady = res;
+    window.gm_authFailure = () => { showSetup("Google rejected this key. Check that Maps JavaScript API and Places API (New) are enabled and that the key allows this site's address."); };
+    const s = document.createElement("script");
+    s.src = "https://maps.googleapis.com/maps/api/js?key=" + encodeURIComponent(S.key) + "&loading=async&v=weekly&callback=__gmReady";
+    s.onerror = () => rej(new Error("Could not load Google Maps. Check your connection and the key."));
+    document.head.appendChild(s);
   });
 }
 async function initMap() {
-  if (!window.L) await loadLeafletFallback();
-  if (!window.L) { $("#mapmsg").innerHTML = '<div class="setup"><div class="card"><h3>The map library did not load</h3><p class="muted">Leaflet is loaded from a CDN. Check your connection and reload the page.</p></div></div>'; return; }
-  const carto = L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", { subdomains: "abcd", maxZoom: 20, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>' });
-  const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors' });
-  const sat = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics" });
-  G.map = L.map("map", { center: [41.39, 2.16], zoom: 6, layers: [carto] });
-  L.control.layers({ "Map": carto, "OpenStreetMap (hosted pages only)": osm, "Satellite": sat }, null, { position: "topleft" }).addTo(G.map);
-  G.map.on("baselayerchange", e => $("#map").classList.toggle("sat", e.name === "Satellite"));
-  G.speedLayer = L.layerGroup().addTo(G.map); G.spotLayer = L.layerGroup().addTo(G.map);
-  G.map.on("click", e => { if (S.addMode) { addSpotAt(e.latlng.lat, e.latlng.lng); setAddMode(false); } });
-  S.mapReady = true; $("#mapmsg").innerHTML = "";
-  $("#mapbtns").innerHTML = '<button class="btn" id="b-add">+ Add spot</button><button class="btn" id="b-fit">Fit to view</button>';
-  $("#b-add").onclick = () => setAddMode(!S.addMode);
-  $("#b-fit").onclick = fitAll;
-  syncSpotMarkers(); syncSpeedMarkers(); fitAll();
+  if (!S.key) return showSetup();
+  try {
+    await loadGoogle();
+    const { Map } = await google.maps.importLibrary("maps");
+    const mk = await google.maps.importLibrary("marker");
+    const pl = await google.maps.importLibrary("places");
+    G.AME = mk.AdvancedMarkerElement; G.Place = pl.Place;
+    G.map = new Map($("#map"), {
+      center: { lat: 41.39, lng: 2.16 }, zoom: 6, mapId: "DEMO_MAP_ID", mapTypeControl: true, streetViewControl: false, fullscreenControl: false,
+      colorScheme: (google.maps.ColorScheme && google.maps.ColorScheme.FOLLOW_SYSTEM) || "FOLLOW_SYSTEM", clickableIcons: false
+    });
+    G.iw = new google.maps.InfoWindow();
+    G.map.addListener("click", e => { if (S.addMode) { addSpotAt(e.latLng.lat(), e.latLng.lng()); setAddMode(false); } else G.iw.close(); });
+    S.mapReady = true; $("#mapmsg").innerHTML = "";
+    $("#mapbtns").innerHTML = '<button class="btn" id="b-add">+ Add spot</button><button class="btn" id="b-fit">Fit to view</button>';
+    $("#b-add").onclick = () => setAddMode(!S.addMode);
+    $("#b-fit").onclick = fitAll;
+    syncSpotMarkers(); syncSpeedMarkers(); fitAll();
+  } catch (e) { showSetup(e.message); }
 }
-function flyTo(lat, lng, minZoom) { G.map.setView([lat, lng], Math.max(G.map.getZoom(), minZoom)); }
+function showSetup(err) {
+  S.mapReady = false;
+  $("#mapmsg").innerHTML = `<div class="setup"><div class="card">
+    <h3>Connect Google Maps</h3>
+    <p class="muted">Paste a Google Maps API key. It is kept in this browser only and is never written into the page.</p>
+    <ol class="small"><li>In Google Cloud, enable <b>Maps JavaScript API</b> and <b>Places API (New)</b>.</li>
+    <li>Create an API key and restrict it to the address you open this page from.</li></ol>
+    ${err ? `<p class="err">${esc(err)}</p>` : ""}
+    <input type="text" id="keyin" placeholder="AIza…" value="${esc(S.key)}" autocomplete="off">
+    <div class="row"><button class="btn primary" id="keysave">Save and load map</button></div></div></div>`;
+  $("#keysave").onclick = () => { S.key = $("#keyin").value.trim(); lsSet("csa.key", S.key); if (!S.key) return; location.reload(); };
+}
 function setAddMode(on) {
   S.addMode = on;
   const old = $("#mapmsg .banner"); if (old) old.remove();
   if (on) { const b = document.createElement("div"); b.className = "banner"; b.textContent = "Click the map to place the spot. Esc cancels."; $("#mapmsg").appendChild(b); }
-  $(".mapwrap").classList.toggle("adding", on);
+  if (G.map) G.map.setOptions({ draggableCursor: on ? "crosshair" : null });
   const bt = $("#b-add"); if (bt) bt.textContent = on ? "Cancel" : "+ Add spot";
 }
 function pinEl(s, sel) {
   const d = document.createElement("div");
   d.className = "pin" + (s.best ? " best" : "") + (sel ? " sel" : "");
-  d.innerHTML = '<svg viewBox="0 0 30 38"><path class="g" d="M15 1C7.3 1 1 7.2 1 14.9 1 25 15 37 15 37s14-12 14-22.1C29 7.2 22.7 1 15 1z" stroke="#fff" stroke-width="2"/></svg>' + (s.best ? "<span>★</span>" : "");
+  d.innerHTML = '<svg viewBox="0 0 30 38"><path class="g" d="M15 1C7.3 1 1 7.2 1 14.9 1 25 15 37 15 37s14-12 14-22.100C29 7.200 22.700 1 15 1z" stroke="#fff" stroke-width="2"/></svg>' + (s.best ? "<span>★</span>" : "");
   return d;
 }
-const spotIcon = (s, sel) => L.divIcon({ className: "", html: pinEl(s, sel), iconSize: [30, 38], iconAnchor: [15, 38] });
 function syncSpotMarkers() {
   if (!S.mapReady) return;
   const ids = new Set(S.spots.map(s => s.id));
-  for (const [id, m] of G.spotMk) if (!ids.has(id)) { G.spotLayer.removeLayer(m); G.spotMk.delete(id); }
+  for (const [id, m] of G.spotMk) if (!ids.has(id)) { m.map = null; G.spotMk.delete(id); }
   for (const s of S.spots) {
-    const sel = S.ui.spotId === s.id;
     let m = G.spotMk.get(s.id);
+    const pos = { lat: s.lat, lng: s.lng };
     if (!m) {
-      m = L.marker([s.lat, s.lng], { icon: spotIcon(s, sel), title: s.name, draggable: false });
-      m.on("click", () => selectSpot(s.id, true));
-      m.on("dragend", () => { const p = m.getLatLng(), sp = spotById(s.id); sp.lat = p.lat; sp.lng = p.lng; DB.put("spots", sp); if (S.ui.spotId === s.id) renderTab(); });
-      G.spotLayer.addLayer(m); G.spotMk.set(s.id, m);
-    } else { m.setLatLng([s.lat, s.lng]); m.setIcon(spotIcon(s, sel)); }
-    if (m.dragging) { sel ? m.dragging.enable() : m.dragging.disable(); }
-    m.setZIndexOffset(sel ? 2000 : 1000);
+      m = new G.AME({ map: G.map, position: pos, content: pinEl(s, false), title: s.name, gmpDraggable: false, zIndex: 10 });
+      m.addListener("click", () => selectSpot(s.id, true));
+      m.addListener("dragend", () => { const p = m.position; const sp = spotById(s.id); sp.lat = p.lat; sp.lng = p.lng; DB.put("spots", sp); if (S.ui.spotId === s.id) renderTab(); });
+      G.spotMk.set(s.id, m);
+    } else { m.position = pos; m.title = s.name; m.content = pinEl(s, S.ui.spotId === s.id); }
+    m.gmpDraggable = S.ui.spotId === s.id;
+    m.zIndex = S.ui.spotId === s.id ? 20 : 10;
   }
 }
 function syncSpeedMarkers() {
@@ -316,19 +321,21 @@ function syncSpeedMarkers() {
   for (const r of S.speed) {
     let m = G.speedMk.get(r.id);
     if (!m) {
-      m = L.circleMarker([r.lat, r.lng], { radius: 6, weight: 1.5, color: "#fff", className: "dotc", fillColor: speedColor(r.down), fillOpacity: .95 });
-      m.on("click", () => openSpeedInfo(r));
+      const d = document.createElement("div"); d.className = "dot"; d.style.background = speedColor(r.down);
+      m = new G.AME({ position: { lat: r.lat, lng: r.lng }, content: d, title: Math.round(r.down) + " Mbps", zIndex: 1 });
+      m.addListener("click", () => openSpeedInfo(r));
       G.speedMk.set(r.id, m);
     }
-    const want = isShown(r), has = G.speedLayer.hasLayer(m);
-    if (want && !has) G.speedLayer.addLayer(m); else if (!want && has) G.speedLayer.removeLayer(m);
+    const want = isShown(r) ? G.map : null;
+    if (m.map !== want) m.map = want;
   }
 }
 function fitAll() {
   if (!S.mapReady) return;
-  const pts = S.spots.length ? S.spots.map(s => [s.lat, s.lng]) : S.speed.filter(isShown).map(r => [r.lat, r.lng]);
+  const pts = S.spots.length ? S.spots.map(s => ({ lat: s.lat, lng: s.lng })) : S.speed.filter(isShown).map(r => ({ lat: r.lat, lng: r.lng }));
   if (!pts.length) return;
-  G.map.fitBounds(L.latLngBounds(pts), { padding: [40, 40], maxZoom: 15 });
+  const b = new google.maps.LatLngBounds(); pts.forEach(p => b.extend(p));
+  G.map.fitBounds(b, 60); google.maps.event.addListenerOnce(G.map, "idle", () => { if (G.map.getZoom() > 15) G.map.setZoom(15); });
 }
 function nearestSpot(lat, lng, within = 500) {
   let best = null, bd = within;
@@ -341,56 +348,35 @@ function openSpeedInfo(r) {
   el.innerHTML = `<b>${fmt(r.down, 1)} ↓ / ${fmt(r.up, 1)} ↑ Mbps</b><div>${esc(fmtDate(r.t))} · ${esc(r.type)}${r.ping != null ? " · " + r.ping + " ms" : ""}</div><div>${esc(r.server || "")}</div>`;
   const add = (label, fn) => { const b = document.createElement("button"); b.className = "btn sm"; b.textContent = label; b.onclick = fn; el.appendChild(b); };
   if (n) add("Log at " + n.s.name, () => logSpeedAtSpot(r, n.s));
-  add("New spot here", () => { G.map.closePopup(); addSpotAt(r.lat, r.lng); });
-  add("Hide", () => { S.hidden.add(r.id); saveHidden(); G.map.closePopup(); syncSpeedMarkers(); renderTab(); });
-  L.popup().setLatLng([r.lat, r.lng]).setContent(el).openOn(G.map);
+  add("New spot here", () => { G.iw.close(); addSpotAt(r.lat, r.lng); });
+  add("Hide", () => { S.hidden.add(r.id); saveHidden(); G.iw.close(); syncSpeedMarkers(); renderTab(); });
+  G.iw.setContent(el); G.iw.setPosition({ lat: r.lat, lng: r.lng }); G.iw.open(G.map);
 }
 async function logSpeedAtSpot(r, s) {
   const id = "st-" + r.id;
   if (S.wifi.some(w => w.id === id)) { toast("Already logged at " + s.name); return; }
+  if (r.type !== "Wifi") { /* still allowed, noted in the row */ }
   const w = { id, spotId: s.id, t: r.t, down: r.down, up: r.up, ping: r.ping, note: r.type === "Wifi" ? "From Speedtest export" : "From Speedtest export (" + r.type + ")", src: "speedtest" };
-  await DB.put("wifi", w); S.wifi.push(w); G.map.closePopup(); toast("Logged at " + s.name); renderTab();
+  await DB.put("wifi", w); S.wifi.push(w); G.iw.close(); toast("Logged at " + s.name); renderTab();
 }
 
-/* ---------- Places (OpenStreetMap Nominatim, free, about 1 request per second) ---------- */
-let lastNom = 0;
-async function nomWait() { const w = 1100 - (Date.now() - lastNom); if (w > 0) await new Promise(r => setTimeout(r, w)); lastNom = Date.now(); }
-const OSM_T = { node: "N", way: "W", relation: "R" };
-function osmFacts(x) {
-  const t = x.extratags || {}, f = [];
-  const kind = (x.type || "").replace(/_/g, " "); if (kind) f.push(kind[0].toUpperCase() + kind.slice(1));
-  if (t.opening_hours) f.push("Open " + t.opening_hours);
-  if (t.fee === "yes") f.push("Paid"); else if (t.fee === "no") f.push("Free");
-  [["drinking_water", "Drinking water"], ["toilets", "Toilets"], ["shower", "Showers"], ["power_supply", "Electricity"], ["sanitary_dump_station", "Waste dump"]].forEach(([k, l]) => { if (t[k] === "yes") f.push(l); });
-  if (t.internet_access) f.push("Internet: " + t.internet_access);
-  return f.join(" · ");
-}
-function osmPlace(x) {
-  const t = x.extratags || {};
+/* ---------- Google Places (New) ---------- */
+function placeData(p) {
   return {
-    id: (OSM_T[x.osm_type] || "N") + x.osm_id, name: x.name || (x.display_name || "").split(",")[0], address: x.display_name || "", rating: null, ratingCount: null,
-    summary: [t.description, osmFacts(x)].filter(Boolean).join(" — "), types: [x.category, x.type].filter(Boolean),
-    uri: "https://www.openstreetmap.org/" + x.osm_type + "/" + x.osm_id, web: t.website || t["contact:website"] || "", fetchedAt: Date.now(), src: "osm",
-    lat: parseFloat(x.lat), lng: parseFloat(x.lon)
+    id: p.id, name: p.displayName || "", address: p.formattedAddress || "", rating: p.rating ?? null, ratingCount: p.userRatingCount ?? null,
+    summary: (p.editorialSummary && (p.editorialSummary.text || p.editorialSummary)) || "", types: (p.types || []).slice(0, 4),
+    uri: p.googleMapsURI || "", web: p.websiteURI || "", fetchedAt: Date.now()
   };
 }
-const placeFrom = p => ({ id: p.id, name: p.name, address: p.address, rating: p.rating, ratingCount: p.ratingCount, summary: p.summary, types: p.types, uri: p.uri, web: p.web, fetchedAt: p.fetchedAt, src: p.src });
-async function nominatim(path) {
-  await nomWait();
-  const r = await fetch("https://nominatim.openstreetmap.org/" + path + "&format=jsonv2&extratags=1&accept-language=" + encodeURIComponent(navigator.language || "en"));
-  if (!r.ok) throw new Error(r.status === 403 && location.protocol === "file:" ? "OpenStreetMap blocks searches from a page opened from your disk. Host the page online (for example on Netlify) and search will work." : "OpenStreetMap search failed (" + r.status + "). Wait a moment and try again.");
-  return r.json();
-}
 async function searchPlaces(q) {
-  if (!S.mapReady) throw new Error("The map has not loaded yet.");
-  const b = G.map.getBounds(), vb = [b.getWest(), b.getNorth(), b.getEast(), b.getSouth()].join(",");
-  return (await nominatim("search?limit=6&q=" + encodeURIComponent(q) + "&viewbox=" + vb)).map(osmPlace);
+  if (!S.mapReady) throw new Error("Connect Google Maps first (Data tab).");
+  const { places } = await G.Place.searchByText({ textQuery: q, fields: PLACE_FIELDS, maxResultCount: 6, locationBias: G.map.getCenter() });
+  return places.map(p => ({ ...placeData(p), lat: p.location.lat(), lng: p.location.lng() }));
 }
 async function refreshPlace(s) {
-  if (s.place.src !== "osm") throw new Error("Only OpenStreetMap places can be refreshed in v1.");
-  const j = await nominatim("lookup?osm_ids=" + encodeURIComponent(s.place.id));
-  if (!j.length) throw new Error("This place is no longer in OpenStreetMap.");
-  s.place = placeFrom(osmPlace(j[0])); await DB.put("spots", s);
+  const p = new G.Place({ id: s.place.id });
+  await p.fetchFields({ fields: PLACE_FIELDS });
+  s.place = placeData(p); await DB.put("spots", s);
 }
 
 /* ---------- spots ---------- */
@@ -403,7 +389,7 @@ async function addSpotAt(lat, lng, extra = {}) {
 function selectSpot(id, pan, focusName) {
   S.ui.spotId = id; S.ui.tab = "spots"; S.ui.linkResults = null;
   const s = spotById(id);
-  if (s && pan && S.mapReady) flyTo(s.lat, s.lng, 14);
+  if (s && pan && S.mapReady) { G.map.panTo({ lat: s.lat, lng: s.lng }); if (G.map.getZoom() < 12) G.map.setZoom(14); }
   syncSpotMarkers(); renderAll();
   if (focusName) { const n = $("#f-name"); if (n) { n.focus(); n.select(); } }
 }
@@ -544,8 +530,8 @@ function spotsHTML() {
   list.sort((a, b) => S.ui.sort === "wifi" ? sc(b) - sc(a) : S.ui.sort === "new" ? b.created - a.created : (b.best - a.best) || a.name.localeCompare(b.name));
   const res = S.ui.results;
   return `<div class="stack">
-    <form id="psearch" class="row" style="flex-wrap:nowrap"><input type="search" id="pq" placeholder="Search a place or address" aria-label="Search places"><button class="btn primary" type="submit">Search</button></form>
-    ${res === "loading" ? '<p class="muted small">Searching…</p>' : res && res.error ? `<p class="err small">${esc(res.error)}</p>` : res ? `<div class="stack">${res.length ? res.map((p, i) => `<div class="card"><div class="t"><b>${esc(p.name)}</b>${p.rating ? `<span class="small mono">★ ${fmt(p.rating, 1)}</span>` : ""}</div><div class="muted small">${esc(p.address)}</div>${p.summary ? `<p class="small" style="margin-top:4px">${esc(p.summary)}</p>` : ""}<div class="row" style="margin-top:8px"><button class="btn sm primary" data-act="addplace" data-i="${i}">Add as spot</button><a class="small" href="${esc(p.uri)}" target="_blank" rel="noopener">OpenStreetMap</a><a class="small" href="${gmapsUrl(p)}" target="_blank" rel="noopener">Google Maps</a></div></div>`).join("") : '<p class="muted small">No matches.</p>'}<button class="btn sm ghost" data-act="clearres">Clear results</button></div>` : ""}
+    <form id="psearch" class="row" style="flex-wrap:nowrap"><input type="search" id="pq" placeholder="Search Google Maps to add a spot" aria-label="Search Google Maps"><button class="btn primary" type="submit">Search</button></form>
+    ${res === "loading" ? '<p class="muted small">Searching…</p>' : res && res.error ? `<p class="err small">${esc(res.error)}</p>` : res ? `<div class="stack">${res.length ? res.map((p, i) => `<div class="card"><div class="t"><b>${esc(p.name)}</b>${p.rating ? `<span class="small mono">★ ${fmt(p.rating, 1)}</span>` : ""}</div><div class="muted small">${esc(p.address)}</div>${p.summary ? `<p class="small" style="margin-top:4px">${esc(p.summary)}</p>` : ""}<div class="row" style="margin-top:8px"><button class="btn sm primary" data-act="addplace" data-i="${i}">Add as spot</button><a class="small" href="${esc(p.uri)}" target="_blank" rel="noopener">Open in Google Maps</a></div></div>`).join("") : '<p class="muted small">No matches.</p>'}<button class="btn sm ghost" data-act="clearres">Clear results</button></div>` : ""}
     <div class="row grow"><select id="sortsel" aria-label="Sort spots"><option value="best"${S.ui.sort === "best" ? " selected" : ""}>Best first</option><option value="wifi"${S.ui.sort === "wifi" ? " selected" : ""}>Fastest WiFi</option><option value="new"${S.ui.sort === "new" ? " selected" : ""}>Newest</option></select>
       <button class="chip" data-act="bestonly" aria-pressed="${S.ui.bestOnly}">★ Best only</button></div>
     ${list.length ? list.map(s => { const st = wifiStats(s.id); return `<button class="card click" data-act="open" data-id="${s.id}"><div class="t"><b>${s.best ? '<span class="star">★</span> ' : ""}${esc(s.name)}</b></div>${s.place && s.place.summary ? `<div class="muted small" style="margin:2px 0 6px">${esc(s.place.summary)}</div>` : s.notes ? `<div class="muted small" style="margin:2px 0 6px">${esc(s.notes.slice(0, 110))}</div>` : ""}<div>${wifiChip(st)}</div>${st ? `<div class="bar" style="margin-top:6px"><i style="width:${Math.min(100, st.down / 5)}%"></i></div>` : ""}</button>`; }).join("") :
@@ -554,16 +540,15 @@ function spotsHTML() {
 }
 function detailHTML(s) {
   const w = wifiOf(s.id), st = wifiStats(s.id), p = s.place;
-  const stale = p && p.src !== "osm" && Date.now() - p.fetchedAt > 30 * 864e5;
+  const stale = p && Date.now() - p.fetchedAt > 30 * 864e5;
   const lr = S.ui.linkResults;
   return `<div class="stack">
     <div class="row"><button class="btn sm" data-act="back">← All spots</button><button class="btn sm" data-act="flyto">Show on map</button></div>
     <div class="row" style="flex-wrap:nowrap"><input type="text" id="f-name" data-field="name" value="${esc(s.name)}" aria-label="Spot name" style="font:700 17px var(--font-display)"><button class="chip" data-act="best" aria-pressed="${s.best}">★ Best</button></div>
     <div class="muted small mono">${s.lat.toFixed(5)}, ${s.lng.toFixed(5)} · drag the pin to adjust</div>
-    <div class="row small"><a href="${gmapsUrl(s)}" target="_blank" rel="noopener">Open in Google Maps</a><a href="${gdirUrl(s)}" target="_blank" rel="noopener">Directions in Google Maps</a></div>
-    <h2>About this place</h2>
-    ${p ? `<div class="gbox"><b>${esc(p.name)}</b>${p.rating ? `<div class="small mono">★ ${fmt(p.rating, 1)} (${fmt(p.ratingCount)})</div>` : ""}<div class="small muted">${esc(p.address)}</div>${p.summary ? `<p class="small">${esc(p.summary)}</p>` : '<p class="small muted">The map data has no description for this place.</p>'}<div class="row small"><a href="${esc(p.uri)}" target="_blank" rel="noopener">Open on ${p.src === "osm" ? "OpenStreetMap" : "Google Maps"}</a>${p.web ? `<a href="${esc(p.web)}" target="_blank" rel="noopener">Website</a>` : ""}</div><div class="src">Data from ${p.src === "osm" ? "OpenStreetMap contributors" : "Google Maps"}, fetched ${new Date(p.fetchedAt).toLocaleDateString()}${stale ? " (over 30 days old)" : ""}. ${p.src === "osm" ? '<button class="btn sm ghost" data-act="refresh">Refresh</button>' : ""} <button class="btn sm ghost" data-act="unlink">Unlink</button></div></div>`
-      : `<div class="gbox"><p class="small muted">Not linked. Link this spot to an OpenStreetMap place to pull its type, opening hours and facilities where they are mapped.</p><div><button class="btn sm" data-act="link">Find on OpenStreetMap</button></div>${lr === "loading" ? '<p class="small muted">Searching…</p>' : lr && lr.error ? `<p class="err small">${esc(lr.error)}</p>` : lr ? (lr.length ? lr.map((x, i) => `<div class="row" style="justify-content:space-between;flex-wrap:nowrap"><span class="small" style="min-width:0"><b>${esc(x.name)}</b><br><span class="muted">${esc(x.address)}</span></span><button class="btn sm primary" data-act="pickplace" data-i="${i}">Link</button></div>`).join("") : '<p class="small muted">No matches in the current map view.</p>') : ""}</div>`}
+    <h2>From Google Maps</h2>
+    ${p ? `<div class="gbox"><b>${esc(p.name)}</b>${p.rating ? `<div class="small mono">★ ${fmt(p.rating, 1)} (${fmt(p.ratingCount)})</div>` : ""}<div class="small muted">${esc(p.address)}</div>${p.summary ? `<p class="small">${esc(p.summary)}</p>` : '<p class="small muted">Google has no description for this place.</p>'}<div class="row small"><a href="${esc(p.uri)}" target="_blank" rel="noopener">Open in Google Maps</a>${p.web ? `<a href="${esc(p.web)}" target="_blank" rel="noopener">Website</a>` : ""}</div><div class="src">Data from Google Maps, fetched ${new Date(p.fetchedAt).toLocaleDateString()}${stale ? " (over 30 days old)" : ""}. <button class="btn sm ghost" data-act="refresh">Refresh</button> <button class="btn sm ghost" data-act="unlink">Unlink</button></div></div>`
+      : `<div class="gbox"><p class="small muted">Not linked. Link this spot if it exists on Google Maps to pull its description and rating.</p><div><button class="btn sm" data-act="link">Find on Google Maps</button></div>${lr === "loading" ? '<p class="small muted">Searching…</p>' : lr && lr.error ? `<p class="err small">${esc(lr.error)}</p>` : lr ? (lr.length ? lr.map((x, i) => `<div class="row" style="justify-content:space-between;flex-wrap:nowrap"><span class="small" style="min-width:0"><b>${esc(x.name)}</b><br><span class="muted">${esc(x.address)}</span></span><button class="btn sm primary" data-act="pickplace" data-i="${i}">Link</button></div>`).join("") : '<p class="small muted">No matches near the map centre.</p>') : ""}</div>`}
     <h2>My notes</h2>
     <textarea id="f-notes" data-field="notes" placeholder="Parking, noise, sun, facilities, who to avoid…">${esc(s.notes)}</textarea>
     <h2>Photos <span class="muted" style="text-transform:none;letter-spacing:0">(private, this browser)</span></h2>
@@ -599,8 +584,8 @@ function speedHTML() {
 function dataHTML() {
   const im = S.ui.importRows;
   return `<div class="stack">
-    <h2>Map</h2>
-    <div class="card"><p class="small">v1 needs no key. The map is OpenStreetMap data drawn by CARTO. Place search is OpenStreetMap Nominatim, limited to about one search per second, and only works once the page is hosted online. The satellite view is Esri imagery.</p></div>
+    <h2>Google Maps</h2>
+    <div class="card"><p class="small">${S.key ? "A key is saved in this browser." : "No key saved."}</p><div class="row" style="margin-top:8px"><button class="btn sm" data-act="changekey">${S.key ? "Change key" : "Add key"}</button></div></div>
     <h2>Import your saved places</h2>
     <p class="small muted">Use the <code>Saved Places.json</code> from Google Takeout (Saved), or a My Maps layer exported as KML. Then tick only the spots you want.</p>
     <div><label class="btn" for="saved-in">Choose file</label><input type="file" id="saved-in" accept=".json,.geojson,.kml,.csv" hidden></div>
@@ -632,13 +617,13 @@ body.addEventListener("click", async e => {
   switch (act) {
     case "open": selectSpot(id, true); break;
     case "back": S.ui.spotId = null; syncSpotMarkers(); renderAll(); break;
-    case "flyto": if (s && S.mapReady) flyTo(s.lat, s.lng, 16); break;
+    case "flyto": if (s && S.mapReady) { G.map.panTo({ lat: s.lat, lng: s.lng }); G.map.setZoom(16); } break;
     case "best": s.best = !s.best; await DB.put("spots", s); syncSpotMarkers(); renderTab(); break;
     case "bestonly": S.ui.bestOnly = !S.ui.bestOnly; savePrefs(); renderTab(); break;
     case "clearres": S.ui.results = null; renderTab(); break;
-    case "addplace": { const p = S.ui.results[+a.dataset.i]; const ns = await addSpotAt(p.lat, p.lng, { name: p.name, place: placeFrom(p) }); S.ui.results = null; break; }
+    case "addplace": { const p = S.ui.results[+a.dataset.i]; const ns = await addSpotAt(p.lat, p.lng, { name: p.name, place: { id: p.id, name: p.name, address: p.address, rating: p.rating, ratingCount: p.ratingCount, summary: p.summary, types: p.types, uri: p.uri, web: p.web, fetchedAt: p.fetchedAt } }); S.ui.results = null; break; }
     case "link": S.ui.linkResults = "loading"; renderTab(); try { S.ui.linkResults = await searchPlaces(s.name + " "); } catch (er) { S.ui.linkResults = { error: er.message || "Search failed." }; } renderTab(); break;
-    case "pickplace": { const p = S.ui.linkResults[+a.dataset.i]; s.place = placeFrom(p); if (/^Unnamed spot$/.test(s.name)) s.name = p.name; await DB.put("spots", s); S.ui.linkResults = null; syncSpotMarkers(); renderTab(); break; }
+    case "pickplace": { const p = S.ui.linkResults[+a.dataset.i]; s.place = { id: p.id, name: p.name, address: p.address, rating: p.rating, ratingCount: p.ratingCount, summary: p.summary, types: p.types, uri: p.uri, web: p.web, fetchedAt: p.fetchedAt }; if (/^Unnamed spot$/.test(s.name)) s.name = p.name; await DB.put("spots", s); S.ui.linkResults = null; syncSpotMarkers(); renderTab(); break; }
     case "unlink": s.place = null; await DB.put("spots", s); renderTab(); break;
     case "refresh": try { a.textContent = "…"; await refreshPlace(s); renderTab(); } catch (er) { toast("Could not refresh: " + (er.message || "error")); renderTab(); } break;
     case "photo": openLightbox(id); break;
@@ -649,9 +634,10 @@ body.addEventListener("click", async e => {
     case "hidef": S.speed.filter(passFilter).forEach(r => S.hidden.add(r.id)); saveHidden(); syncSpeedMarkers(); renderTab(); break;
     case "onlyf": S.speed.forEach(r => passFilter(r) ? S.hidden.delete(r.id) : S.hidden.add(r.id)); saveHidden(); syncSpeedMarkers(); renderTab(); break;
     case "showall": S.hidden.clear(); saveHidden(); syncSpeedMarkers(); renderTab(); break;
-    case "inview": case "hideview": { const b = G.map.getBounds(); if (!b) break; S.speed.filter(passFilter).forEach(r => { const inside = b.contains([r.lat, r.lng]); if (act === "inview") { inside ? S.hidden.delete(r.id) : S.hidden.add(r.id); } else if (inside) S.hidden.add(r.id); }); saveHidden(); syncSpeedMarkers(); renderTab(); break; }
-    case "speedrow": { const r = S.speed.find(x => x.id === id); if (r && S.mapReady) { flyTo(r.lat, r.lng, 13); if (isShown(r)) openSpeedInfo(r); } break; }
-    case "clearspeed": if (armed(a, "Tap again to remove all")) { await DB.clear("speed"); S.speed = []; if (G.speedLayer) G.speedLayer.clearLayers(); G.speedMk.clear(); renderTab(); } break;
+    case "inview": case "hideview": { const b = G.map.getBounds(); if (!b) break; S.speed.filter(passFilter).forEach(r => { const inside = b.contains({ lat: r.lat, lng: r.lng }); if (act === "inview") { inside ? S.hidden.delete(r.id) : S.hidden.add(r.id); } else if (inside) S.hidden.add(r.id); }); saveHidden(); syncSpeedMarkers(); renderTab(); break; }
+    case "speedrow": { const r = S.speed.find(x => x.id === id); if (r && S.mapReady) { G.map.panTo({ lat: r.lat, lng: r.lng }); G.map.setZoom(Math.max(G.map.getZoom(), 13)); if (isShown(r)) openSpeedInfo(r); } break; }
+    case "clearspeed": if (armed(a, "Tap again to remove all")) { await DB.clear("speed"); S.speed = []; syncSpeedMarkers(); G.speedMk.forEach(m => m.map = null); G.speedMk.clear(); renderTab(); } break;
+    case "changekey": showSetup(); break;
     case "impall": S.ui.importRows.forEach(r => { if (!r.dupe) r.pick = true; }); renderTab(); break;
     case "impnone": S.ui.importRows.forEach(r => r.pick = false); renderTab(); break;
     case "impcancel": S.ui.importRows = null; renderTab(); break;
