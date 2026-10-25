@@ -1,4 +1,4 @@
-# Camper Spot Atlas
+# Van Spots
 
 A single-page map for tracking camper van spots, with private photos, WiFi speed readings and a filterable Speedtest layer.
 

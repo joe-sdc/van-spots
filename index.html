@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Camper Spot Atlas</title>
+<title>Van Spots</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
@@ -137,7 +137,7 @@ td{padding:5px 6px 5px 0;border-top:1px solid var(--line)}
 <body>
 <div class="app">
   <aside class="panel">
-    <div class="head"><h1>Camper Spot Atlas</h1><span class="sub" id="counts"></span></div>
+    <div class="head"><h1>Van Spots</h1><span class="sub" id="counts"></span></div>
     <div class="tabs" role="tablist" id="tabs">
       <button class="tab" role="tab" data-tab="spots">Spots</button>
       <button class="tab" role="tab" data-tab="speed">Speedtests</button>
@@ -648,7 +648,7 @@ body.addEventListener("click", async e => {
     }
     case "export": {
       const blob = new Blob([JSON.stringify({ exported: new Date().toISOString(), spots: S.spots, wifi: S.wifi }, null, 2)], { type: "application/json" });
-      const u = URL.createObjectURL(blob), l = document.createElement("a"); l.href = u; l.download = "camper-spots-" + new Date().toISOString().slice(0, 10) + ".json"; l.click(); setTimeout(() => URL.revokeObjectURL(u), 2000); break;
+      const u = URL.createObjectURL(blob), l = document.createElement("a"); l.href = u; l.download = "van-spots-" + new Date().toISOString().slice(0, 10) + ".json"; l.click(); setTimeout(() => URL.revokeObjectURL(u), 2000); break;
     }
   }
 });
